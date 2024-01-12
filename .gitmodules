@@ -1,0 +1,3 @@
+[submodule "src/modules/LAVIS"]
+	path = src/modules/LAVIS
+	url = https://github.com/tejas1995/LAVIS.git
