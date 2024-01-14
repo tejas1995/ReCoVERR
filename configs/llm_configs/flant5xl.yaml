@@ -1,0 +1,12 @@
+model_name: "google/flan-t5-xl"
+display_name: "FlanT5-XL"
+rephrasing_inference_params:
+  max_new_tokens: 30
+  num_beams: 5
+  early_stopping: True
+rephrasing_examples: [
+  "Question: Is the dog herding or guiding the cows? \n Answer: guiding \n Statement: The dog is guiding the cows.",
+  "Question: Are there any other written numbers visible in the image? \n Answer: no \n Statement: There are no other written numbers visible in the image.",
+  "Question: Which color of clothing is unique to just one of the two people here? \n Answer: black \n Statement: The color of clothing that is unique to just one of the two people here is black.",
+  "Question: Does the picture on the screen involve any human subjects or animals? \n Answer: human \n Statement: The picture on the screen involves human subjects.",
+]

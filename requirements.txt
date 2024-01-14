@@ -1,0 +1,17 @@
+openai==0.27.8
+wandb
+spacy
+nltk
+inflection
+tenacity
+ipykernel
+peft
+torchmetrics
+sentence-transformers
+auto-gptq
+evaluate
+seaborn
+optimum
+bitsandbytes
+tiktoken
+transformers_stream_generator

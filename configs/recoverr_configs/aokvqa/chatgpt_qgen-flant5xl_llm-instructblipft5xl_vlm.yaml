@@ -1,0 +1,33 @@
+exp_name: "chatgpt_qgen-flant5xl_llm-instructblipft5xl_vlm-verifying_prompt_detailed-minnliconfversion"
+
+qgen:
+  class_name: "gpt"
+  model_config_path: "/net/nfs.cirrascale/mosaic/tejass/code/ReCoVERR/configs/qgen_configs/chatgpt-verifying_prompt_detailed.yaml"
+
+llm:
+  class_name: "t5"
+  model_config_path: "/net/nfs.cirrascale/mosaic/tejass/code/ReCoVERR/configs/llm_configs/flant5xl.yaml"
+
+vlm:
+  class_name: "blip"
+  model_config_path: "/net/nfs.cirrascale/mosaic/tejass/code/ReCoVERR/configs/vlm_configs/instructblip_flant5xl.yaml"
+  caption_inference_params:
+    max_length: 30
+    length_penalty: 2.0
+    repetition_penalty: 10.0
+    return_dict_in_generate: True
+    output_scores: True
+  vqa_inference_params:
+    num_beams: 5
+    length_penalty: -1.0
+    return_dict_in_generate: True
+    output_scores: True
+
+
+recoverr:
+  max_evidence_collection_turns: 10
+  questions_generated_per_turn: 5
+  desired_risk: 0.2
+  min_nliconf_threshold: 0.9
+  guessconf_minimum_defeasibility_delta: 0
+  image_aware_guesser: False

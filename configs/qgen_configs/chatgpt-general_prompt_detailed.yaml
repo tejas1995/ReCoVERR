@@ -1,0 +1,5 @@
+qgen_model_name: "ChatGPT"
+gpt_type: "chatgpt-16k"
+max_new_question_tokens: 200
+question_gen_temperature: 1.0
+questiongen_prompts_file: "/net/nfs.cirrascale/mosaic/tejass/data/instruction_prompts/recoverr_prompts/questiongen_prompts_recoverr_verifyingevidences-general_prompt_detailed.json"

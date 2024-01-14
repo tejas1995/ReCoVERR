@@ -1,3 +1,6 @@
 [submodule "src/modules/LAVIS"]
 	path = src/modules/LAVIS
 	url = https://github.com/tejas1995/LAVIS.git
+[submodule "src/modules/lave"]
+	path = src/modules/lave
+	url = https://github.com/mair-lab/lave.git
