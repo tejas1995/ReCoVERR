@@ -70,7 +70,7 @@ class GPTQuestionGenerator:
         self.questiongen_prompts = yaml.load(open(config['questiongen_prompts_file'], 'r'), Loader=yaml.FullLoader)
 
         logger.info(f"Initialized {self.qgen_model_name} QuestionGenerator")
-        logger.info("-"*100)
+        #logger.info("-"*100)
 
     def __str__(self) -> str:
         return f"Question Generator: {self.qgen_model_name}"
@@ -172,8 +172,10 @@ class GPTQuestionGenerator:
             )
         questions = [x.strip() for x in gpt_response.split('\n')]
         questions = [q for q in questions if len(q) > 0]
-        questions = [self.remove_question_number(q) for q in questions]
+        questions = [self.remove_question_number(q).strip() for q in questions]
         questions = [q for q in questions if q.endswith('?') and len(q) > 0]
+        #if len(questions) == 0:
+        #    pdb.set_trace()
         return questions
 
 class MistralQuestionGenerator:

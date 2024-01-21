@@ -78,14 +78,17 @@ class T5LLM:
             "The re-phrased statement should summarize the question and answer. " \
             "The re-phrased statement should not be a question. \n " + \
             '\n\n'.join(self.rephrasing_examples) + \
-            f"Question: {question} \n" \
-            f"Answer: {answer} \n" \
+            f" \n\nQuestion: {question} \n " \
+            f"Answer: {answer} \n " \
             "Statement: "
         input_ids = self.tokenizer(prompt, return_tensors='pt').input_ids.to(self.device)
         output_ids = self.model.generate(input_ids, **self.rephrasing_inference_params)
         rephrased_question = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
         #pdb.set_trace()
-        return rephrased_question
+        if '?' in rephrased_question:
+            return f"{question} {answer}."
+        else:
+            return rephrased_question
     
     def rephrase_batched_qas_to_statements(self, questions, answers):
         prompts = [f"Rephrase the question and answer into a single statement. " \
@@ -104,6 +107,9 @@ class T5LLM:
         #    logger.info(f"Rephrased question: {r}")
         #    logger.info("-"*100)
         #pdb.set_trace()
+        for i, r in enumerate(rephrased_questions):
+            if '?' in r:
+                rephrased_questions[i] = f"{questions[i]} {answers[i]}."
         return rephrased_questions
     
 LLM_CLASS_MAP = {

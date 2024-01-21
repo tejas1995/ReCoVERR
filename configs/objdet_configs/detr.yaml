@@ -1,0 +1,3 @@
+model_name: "facebook/detr-resnet-50"
+model_display_name: "DETR-ResNet-50"
+objdet_threshold: 0.9

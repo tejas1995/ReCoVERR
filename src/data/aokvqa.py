@@ -162,6 +162,7 @@ class AOKVQADataset(Dataset):
         score_dict = [b['score_dict'] for b in batch]
         qids = [b['qid'] for b in batch]
         choices = [b['choices'] for b in batch]
+        questions = [b['question'] for b in batch]
 
         collated_batch = {
             "image": processed_images,
@@ -171,6 +172,7 @@ class AOKVQADataset(Dataset):
             "target": text_outputs,
             "qids": qids,
             "choices": choices,
+            "questions": questions,
         }
         return collated_batch
 

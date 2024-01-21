@@ -1,5 +1,7 @@
 import pdb
 from typing import List
+import pickle as pkl
+
 import numpy as np
 import torch
 from torch import nn
@@ -62,9 +64,9 @@ class BLIP(nn.Module):
         num_trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad is True)
 
         self.device = device
+        self.use_confidence_calibrator = False
         logger.info(f"Loaded BLIP (model={self.display_name})!")
         logger.info("Model size: {:.2f}B parameters ({:.2f}B trainable), {:.2f}GB in memory".format(num_params*10**-9, num_trainable_params*10**-9, calculate_model_size_gb(self.model)))
-        logger.info("-"*100)
 
     def preprocess_batch(self, batch, mode='train'):
         images = batch['images']
@@ -89,6 +91,11 @@ class BLIP(nn.Module):
 
     def set_caption_inference_params(self, caption_inference_params):
         self.caption_inference_params = caption_inference_params
+    
+    def set_confidence_calibrator(self, calibrator_model_path):
+        self.use_confidence_calibrator = True
+        self.confidence_calibrator = pkl.load(open(calibrator_model_path, "rb"))
+        logger.info(f"Loaded VLM confidence calibrator from {calibrator_model_path}!")
 
     def forward(self, batch):
         output_dict = self.model(batch)
@@ -113,7 +120,11 @@ class BLIP(nn.Module):
         yes_logits = logits[:, self.yn_token_ids[0]]
         no_logits = logits[:, self.yn_token_ids[1]]
         yn_logits = torch.cat([yes_logits.unsqueeze(1), no_logits.unsqueeze(1)], dim=1)
-        yn_probs = nn.Softmax(dim=-1)(yn_logits)[:, 0]
+        if self.use_confidence_calibrator:
+            yn_logits = yn_logits.cpu().detach().to(torch.float32).numpy()
+            yn_probs = self.confidence_calibrator.predict_proba(yn_logits)[:, 1]
+        else:
+            yn_probs = nn.Softmax(dim=-1)(yn_logits)[:, 0]
         #print(f"yes_prob: {yes_prob}, no_prob: {no_prob}, sum: {yes_prob + no_prob}")
         return yn_probs.tolist(), yn_logits.tolist()
 
@@ -165,7 +176,7 @@ class BLIP(nn.Module):
                 )
             yn_probs, yn_logits = self.get_answer_confidence(raw_image, [prompt], [answer])
             logprobs_dict["yn_prob"] = yn_probs[0]
-            logprobs_dict["yn_logits"] = yn_logits[0].tolist()
+            logprobs_dict["yn_logits"] = yn_logits[0]#.tolist()
             return f"An image of {answer.lower()}.", logprobs_dict
 
         else:
@@ -177,6 +188,44 @@ class BLIP(nn.Module):
         image = image.repeat(len(questions), 1, 1, 1)
         prompts =[f"Question: {question} Short answer: " for question in questions]
         output = self.model.generate({"image": image, "prompt": prompts}, **self.vqa_inference_params, **kwargs)
+
+        if len(output) == 2:
+            outputs = output[1]
+            transition_scores = self.model.t5_model.compute_transition_scores(
+                outputs.sequences, outputs.scores, outputs.beam_indices, normalize_logits=True
+                #outputs.sequences, outputs.scores, normalize_logits=True
+            )
+            tokenizer = self.model.t5_tokenizer
+            generated_ids = outputs.sequences[:, 1:]
+
+            num_questions = len(questions)
+            sep_token_id  = tokenizer.convert_tokens_to_ids('</s>')
+            pad_token_id = tokenizer.pad_token_id
+            logprobs_dicts = []
+            answers = []
+            for i in range(len(generated_ids)):
+                answer, logprobs_dict = self.get_answer_with_probability(
+                    transition_scores[i].tolist(), 
+                    generated_ids[i].tolist(), 
+                )
+                answers.append(answer)
+                logprobs_dicts.append(logprobs_dict)
+
+            yn_probs, yn_logits = self.get_answer_confidence(raw_image, questions, answers)
+            for i, yn_prob in enumerate(yn_probs):
+                logprobs_dicts[i]["yn_prob"] = yn_prob
+                logprobs_dicts[i]["yn_logits"] = yn_logits
+            confs = [logprobs_dict["yn_prob"] for logprobs_dict in logprobs_dicts]
+            return answers, logprobs_dicts
+
+    def ask_questions_batched(self, raw_images: List, questions: List[str], **kwargs):
+        assert len(raw_images) == len(questions)
+        procd_images = []
+        for raw_image in raw_images:
+            procd_images.append(self.vis_processors["eval"](raw_image))
+        images = torch.stack(procd_images).to(self.device)
+        prompts =[f"Question: {question} Short answer: " for question in questions]
+        output = self.model.generate({"image": images, "prompt": prompts}, **self.vqa_inference_params, **kwargs)
 
         if len(output) == 2:
             outputs = output[1]

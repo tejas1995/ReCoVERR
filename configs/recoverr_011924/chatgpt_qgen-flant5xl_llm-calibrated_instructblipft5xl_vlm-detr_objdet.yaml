@@ -1,4 +1,4 @@
-exp_name: "chatgpt_qgen-flant5xl_llm-instructblipft5xl_vlm-verifying_prompt_detailed-minnliconfversion"
+exp_name: "chatgpt_qgen-flant5xl_llm-calibrated_instructblipft5xl_vlm-detr_objdet-verifying_prompt_detailed"
 
 qgen:
   class_name: "gpt"
@@ -22,12 +22,18 @@ vlm:
     length_penalty: -1.0
     return_dict_in_generate: True
     output_scores: True
-  use_confidence_calibrator: False
+  use_confidence_calibrator: True
+  calibrator_model_path: "/net/nfs.cirrascale/mosaic/tejass/experiments/vl_calibration/calibration_model/calibrated_instructblipflant5xl-aokvqa_direct_answer-calibration_clf.pkl"
+
+objdet:
+  class_name: "detr"
+  model_config_path: "/net/nfs.cirrascale/mosaic/tejass/code/ReCoVERR/configs/objdet_configs/detr.yaml"
 
 recoverr:
   max_evidence_collection_turns: 10
   questions_generated_per_turn: 10
   desired_risk: 0.2
-  min_nliconf_threshold: 0.9
-  guessconf_minimum_defeasibility_delta: 0.2
-  image_aware_guesser: False
+  vqaconfthresh_at_risk: 0.65
+  min_entailment_conf: 0.9
+  defeasibility_delta: 0
+  
