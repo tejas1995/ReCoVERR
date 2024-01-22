@@ -380,19 +380,19 @@ def main():
     t = tqdm(range(len(dataset)))
     qids_completed = 0
     qid2rollouts = defaultdict(list)
+    questions_answered = 0
+    total_risk = 0
     if os.path.exists(output_file):
         qid2rollouts = json.load(open(output_file))
         qid2rollouts = defaultdict(list, qid2rollouts)
         eval_score = sum([max([x['score'] for x in v]) for k, v in qid2rollouts.items()])
         total_lave_score = sum([max([x['lave_score'] for x in v]) for k, v in qid2rollouts.items()])
         questions_answered += sum(max([x['question_answered'] for x in v]) for k, v in qid2rollouts.items())
-        total_risk += sum(min([1-x['lave_score'] for x in v if x['question_answered'] == 1], 0) for k, v in qid2rollouts.items())
+        total_risk += sum(min([1-x['lave_score'] for x in v if x['question_answered'] == 1], default=0) for k, v in qid2rollouts.items())
         qids_completed = len(qid2rollouts.keys())
         logger.info(f"Loaded {len(qid2rollouts)} outputs from {output_file}")
         logger.info(f"Eval score: {eval_score/qids_completed*100.0:.2f}%")
     #pdb.set_trace()
-    questions_answered = 0
-    total_risk = 0
     for i in t:
 
         start_time = time.time()
