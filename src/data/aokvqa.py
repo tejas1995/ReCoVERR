@@ -69,6 +69,8 @@ class AOKVQADataset(Dataset):
             json.dump(self.data, open(preprocd_data_file, 'w'), indent=2)
         else:
             self.data = json.load(open(preprocd_data_file))
+            if split == 'val':
+                self.data = [d for d in self.data if d['difficult_direct_answer'] is False]
             self.qid2score_dict = {d['qid']: d['full_score_dict'] for d in self.data}
 
         self.qids = list(range(len(self.data)))

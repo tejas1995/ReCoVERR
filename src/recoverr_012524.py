@@ -20,6 +20,7 @@ from models.llm import LLM_CLASS_MAP
 from models.vlm import VLM_CLASS_MAP
 from models.qgen import QGEN_CLASS_MAP
 from models.objdet import OBJDET_CLASS_MAP
+from models.regcap_db import REGCAPDB_CLASS_MAP
 
 from utils.eval_utils import lave_scorer
 from utils.openai_utils import openai_caller
@@ -40,15 +41,18 @@ def run_recoverr_verifyingevidences(
     do_print=False
 ) -> Dict:
 
+    do_recoverr = recoverr_config['do_recoverr']
     max_evidence_collection_turns = recoverr_config['max_evidence_collection_turns']
     questions_generated_per_turn = recoverr_config['questions_generated_per_turn']
     desired_risk = recoverr_config['desired_risk']
     vqaconfthresh_at_risk = recoverr_config['vqaconfthresh_at_risk']
     min_entailment_conf = recoverr_config['min_entailment_conf']
     defeasibility_delta = recoverr_config['defeasibility_delta']
+    visual_tools = recoverr_config['visual_tools']
 
     vlm_model = models_dict['vlm']
     objdet_model = models_dict['objdet']
+    regcapdb_model = models_dict['regcapdb']
     qgen_model = models_dict['qgen']
     llm_model = models_dict['llm']
 
@@ -87,6 +91,7 @@ def run_recoverr_verifyingevidences(
         }
     #endregion
 
+    initial_evidences = []
     #region CREATE CAPTION EVIDENCE
     caption, caption_logprobs_dict = vlm_model.caption(query_details['image'])
     #caption_conf = caption_logprobs_dict['yn_prob']
@@ -110,35 +115,98 @@ def run_recoverr_verifyingevidences(
         'is_reliable': True, #if caption_conf >= 1-desired_risk else False,
         'is_relevant': True,
     }
+    initial_evidences.append(caption_evidence)
     #endregion
 
     # region EXTRACT OBJECTS FROM IMAGE
-    image_objects = objdet_model.detect(query_details['image'])
-    objects_statement = f"Objects in the image include {', '.join(image_objects)}."
-    objects_entailment_conf = llm_model.get_entailment_confidence(
-        premise=objects_statement,
-        hypothesis=directvqa_hypothesis
-    )
-    if do_print:
-        print("")
-        print(objects_statement)
-        print(f"P({directvqa_hypothesis} | {objects_statement}) = {objects_entailment_conf:.4f}")
-    objects_evidence = {
-        'question': 'What objects are in the image?',
-        'answer': objects_statement,
-        'vlm_conf': 1.0,
-        'statement': objects_statement,
-        'prediction_entailment_conf': objects_entailment_conf,
-        'counterfactual_prediction_entailment_conf': 0,
-        'relevance': objects_entailment_conf, 
-        'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
-        'is_relevant': True,
-    }
+    if 'objdet' in visual_tools:
+        image_objects = objdet_model.detect(query_details['image'])
+        objects_statement = f"Objects in the image include {', '.join(image_objects)}."
+        objects_entailment_conf = llm_model.get_entailment_confidence(
+            premise=objects_statement,
+            hypothesis=directvqa_hypothesis
+        )
+        if do_print:
+            print("")
+            print(objects_statement)
+            print(f"P({directvqa_hypothesis} | {objects_statement}) = {objects_entailment_conf:.4f}")
+        objects_evidence = {
+            'question': 'What objects are in the image?',
+            'answer': objects_statement,
+            'vlm_conf': 1.0,
+            'statement': objects_statement,
+            'prediction_entailment_conf': objects_entailment_conf,
+            'counterfactual_prediction_entailment_conf': 0,
+            'relevance': objects_entailment_conf, 
+            'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
+            'is_relevant': True,
+        }
+        initial_evidences.append(objects_evidence)
     #endregion
 
-    all_evidences = [caption_evidence, objects_evidence]
-    reliable_evidences = [caption_evidence, objects_evidence]
-    reliable_and_relevant_evidences = [caption_evidence, objects_evidence]
+    # region EXTRACT REGION CAPTIONS FROM IMAGE
+    if 'regcapdb' in visual_tools:
+        region_captions = regcapdb_model.get_captions_by_imageid(query_details['image_id'])
+        regcap_statement = f"Regions in the image include {', '.join(region_captions)}."
+        regcap_entailment_conf = llm_model.get_entailment_confidence(
+            premise=regcap_statement,
+            hypothesis=directvqa_hypothesis
+        )
+        if do_print:
+            print("")
+            print(regcap_statement)
+            print(f"P({directvqa_hypothesis} | {regcap_statement}) = {regcap_entailment_conf:.4f}")
+        regcap_evidence = {
+            'question': 'Describe some regions in the image.',
+            'answer': regcap_statement,
+            'vlm_conf': 1.0,
+            'statement': regcap_statement,
+            'prediction_entailment_conf': regcap_entailment_conf,
+            'counterfactual_prediction_entailment_conf': 0,
+            'relevance': regcap_entailment_conf, 
+            'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
+            'is_relevant': True,
+        }
+        initial_evidences.append(regcap_evidence)
+    #endregion
+
+    if do_recoverr is False:
+        # Answer only based on the image verbalizations collected so far, no further evidence collection
+        aggregated_evidences_premise = ' '.join([x['statement'] for x in initial_evidences])
+        aggregated_evidences_nliconf = llm_model.get_entailment_confidence(
+            premise=aggregated_evidences_premise,
+            hypothesis=directvqa_hypothesis
+        )
+        if do_print:
+            print(f"P({directvqa_hypothesis} | {aggregated_evidences_premise}) = {aggregated_evidences_nliconf:.4f}")
+
+        #if expected_conf >= (1-desired_risk):
+        if aggregated_evidences_nliconf >= min_entailment_conf:
+            return {
+                'prediction': directvqa_predicted_answer,
+                'prediction_type': 'recoverr',
+                'prediction_entailment_conf': aggregated_evidences_nliconf,
+                'visual_conf': 1.0,
+                'overall_conf': aggregated_evidences_nliconf, 
+                'all_evidences': initial_evidences, 
+                'reliable_evidences': initial_evidences, 
+                'reliable_and_relevant_evidences': initial_evidences,
+            }
+        else:
+            return {
+                'prediction': "unknown",
+                'prediction_type': 'abstained',
+                'prediction_entailment_conf': 1.0,
+                'visual_conf': 1.0,
+                'overall_conf': 1.0, 
+                'all_evidences': initial_evidences, 
+                'reliable_evidences': initial_evidences, 
+                'reliable_and_relevant_evidences': initial_evidences,
+            }
+
+    all_evidences = copy.deepcopy(initial_evidences)
+    reliable_evidences = copy.deepcopy(initial_evidences)
+    reliable_and_relevant_evidences = copy.deepcopy(initial_evidences)
     for j in range(max_evidence_collection_turns):
         #region FIND_RELIABLE_EVIDENCES
         # Gather different evidences about the image, retain only the reliable ones
@@ -283,9 +351,15 @@ def main():
     parser.add_argument("--task_type", type=str, choices=['multichoice', 'direct_answer'], default='direct_answer')
     parser.add_argument("--num_rollouts", type=int, default=1)
     parser.add_argument("--num_examples", type=int, default=-1)
-    parser.add_argument("--experiments_dir", type=str, default='/net/nfs.cirrascale/mosaic/tejass/experiments/recoverr/recoverr_011924')
+    parser.add_argument("--experiments_dir", type=str, default='/net/nfs.cirrascale/mosaic/tejass/experiments/recoverr/recoverr_012524')
     parser.add_argument("--wandb_config_file", type=str, default="/net/nfs.cirrascale/mosaic/tejass/data/wandb_config.yaml")
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+
+    # Set seeds
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     # Create dataset
     dataset_class = DATASET_REGISTRY[args.dataset]
@@ -330,6 +404,14 @@ def main():
     logger.info(f"Finished loading ObjectDetector")
     logger.info("-"*100)
 
+    # Load Region captioner DB
+    regcapdb_class = config['regcapdb']['class_name']
+    regcapdb_model_class = REGCAPDB_CLASS_MAP[regcapdb_class]
+    regcapdb_config = yaml.safe_load(open(config['regcapdb']['model_config_path']))
+    regcapdb_model = regcapdb_model_class(regcapdb_config, device)
+    logger.info(f"Finished loading RegionCaption-DB")
+    logger.info("-"*100)
+
     # Load LLM
     llm_class = config['llm']['class_name']
     llm_model_class = LLM_CLASS_MAP[llm_class]
@@ -339,9 +421,10 @@ def main():
     logger.info("-"*100)
 
     models_dict = {
-        'qgen': qgen_model,
         'vlm': vlm_model,
         'objdet': objdet_model,
+        'regcapdb': regcapdb_model,
+        'qgen': qgen_model,
         'llm': llm_model,
     }
 
@@ -359,17 +442,19 @@ def main():
         recoverr_config['defeasibility_delta'],
         recoverr_config['min_entailment_conf']
     )
+    folder_name = config['folder_name']
     if args.num_rollouts != 1:
         experiment_name += '-{}rollouts'.format(args.num_rollouts)
     if args.num_examples != len(dataset):
         experiment_name += '-{}examples'.format(args.num_examples)
-    experiment_dir = os.path.join(args.experiments_dir, f'{args.dataset}_{args.task_type}/{args.split}_outputs/recoverr_verifyingevidences_rollouts')
+    experiment_name += '-seed{}'.format(args.seed)
+    experiment_dir = os.path.join(args.experiments_dir, f'{args.dataset}_{args.task_type}/{args.split}_outputs/recoverr_verifyingevidences_rollouts/{folder_name}')
 
     wandb_logger.initialize(
         wandb_config_filename=args.wandb_config_file, 
-        experiment_name=f'{args.dataset}_{args.split}-{experiment_name}',
+        experiment_name=f'{args.dataset}_{args.split}-{folder_name}-{experiment_name}',
         #project_name='beamsearch_vqa'
-        project_name='recoverr_011924'
+        project_name='recoverr_012524'
     )
     if not os.path.exists(experiment_dir):
         os.makedirs(experiment_dir)
