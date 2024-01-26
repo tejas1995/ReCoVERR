@@ -4,3 +4,6 @@
 [submodule "src/modules/lave"]
 	path = src/modules/lave
 	url = https://github.com/mair-lab/lave.git
+[submodule "src/modules/detectron2"]
+	path = src/modules/detectron2
+	url = https://github.com/facebookresearch/detectron2.git
