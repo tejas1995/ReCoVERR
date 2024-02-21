@@ -108,7 +108,7 @@ class BLIP(nn.Module):
         output = [x.lower() for x in output]
         return output
 
-    def get_answer_confidence(self, raw_image, questions, answers):
+    def get_answer_confidence(self, raw_image, questions, answers, use_calibrator=True):
         prompts = [f"Question: {q} \n" \
             f"Answer: {a} \n" \
             f"Is the given answer correct for the question? Answer yes or no: " for q, a in zip(questions, answers)]
@@ -120,7 +120,7 @@ class BLIP(nn.Module):
         yes_logits = logits[:, self.yn_token_ids[0]]
         no_logits = logits[:, self.yn_token_ids[1]]
         yn_logits = torch.cat([yes_logits.unsqueeze(1), no_logits.unsqueeze(1)], dim=1)
-        if self.use_confidence_calibrator:
+        if self.use_confidence_calibrator and use_calibrator == True:
             yn_logits = yn_logits.cpu().detach().to(torch.float32).numpy()
             yn_probs = self.confidence_calibrator.predict_proba(yn_logits)[:, 1]
         else:
@@ -134,7 +134,7 @@ class BLIP(nn.Module):
         answer = self.model.generate({"image": image, "prompt": prompt}, length_penalty=-1.0)[0].lower()
         return answer
 
-    def ask(self, raw_image, question, **kwargs):
+    def ask(self, raw_image, question, use_calibrator=True, **kwargs):
         image = self.vis_processors["eval"](raw_image).unsqueeze(0).to(self.device)
         prompt = f"Question: {question} Short answer:"
         output = self.model.generate({"image": image, "prompt": prompt}, **self.vqa_inference_params, **kwargs)
@@ -150,7 +150,7 @@ class BLIP(nn.Module):
                     transition_scores[0].tolist(), 
                     generated_ids[0].tolist(), 
                 )
-            yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer])
+            yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer], use_calibrator=use_calibrator)
             logprobs_dict["yn_prob"] = yn_probs[0]
             logprobs_dict["yn_logits"] = yn_logits[0]
             return answer.lower(), logprobs_dict
@@ -336,6 +336,24 @@ class BLIP(nn.Module):
             "prod_token_probs": prod_token_probs
         }
         return answer, logprobs_dict
+
+    def get_entailment_confidence(self, image, premise, hypothesis):
+        prompt = f"Premise: {premise} \n\n" \
+        f"Hypothesis: {hypothesis} \n" \
+        f"Can we infer the hypothesis, based on the premise and the image? Options: yes, no. Answer: "
+        #f"Can we infer the hypothesis from the premise and the image? Options: yes, no. Answer: "
+        image_tensor = self.vis_processors["eval"](image).unsqueeze(0).to(self.device)
+        image_tensor = image_tensor.repeat(1, 1, 1, 1)
+        output = self.model({"image": image_tensor, "text_input": [prompt], "text_output": ["yes"]})
+        logits = output["outputs"]["logits"][:, 0, :]
+
+        yes_logits = logits[:, self.yn_token_ids[0]]
+        no_logits = logits[:, self.yn_token_ids[1]]
+        yn_logits = torch.cat([yes_logits.unsqueeze(1), no_logits.unsqueeze(1)], dim=1)
+        yn_probs = nn.Softmax(dim=-1)(yn_logits)[:, 0]
+        #print(f"\nEvidence: {evidence}")
+        #print(f"Confidence in hypothesis given the evidences: {yn_probs[0].item():.4f}")
+        return yn_probs.tolist(), yn_logits.tolist()
 
 VLM_CLASS_MAP = {
     "blip": BLIP

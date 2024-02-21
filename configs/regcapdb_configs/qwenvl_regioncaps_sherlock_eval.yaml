@@ -1,0 +1,2 @@
+imcapdb_display_name: 'Qwen-VL-Chat-RegionCaptions-SherlockEval'
+region_captions_file: '/net/nfs.cirrascale/mosaic/tejass/data/sherlock/preprocd_data_balanced/qwen_verbalizations/sherlock_eval_samregions_qwenregioncaptions.jsonl'

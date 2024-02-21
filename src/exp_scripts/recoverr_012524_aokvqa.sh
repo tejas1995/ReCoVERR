@@ -30,7 +30,7 @@ echo "TASK_TYPE: $TASK_TYPE"
 
 python -m recoverr_012524 \
     --config_file ${1} \
-    --dataset aokvqa \
-    --split val \
+    --dataset $DATA \
+    --split $SPLIT \
     --task_type direct_answer \
     --seed $SEED

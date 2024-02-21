@@ -59,7 +59,8 @@ def run_recoverr_verifyingevidences(
     #region DIRECTVQA    
     directvqa_predicted_answer, directvqa_answer_logprobsdict = vlm_model.ask(
             raw_image=query_details['image'], 
-            question=query_details['question']
+            question=query_details['question'],
+            use_calibrator=True
         )
     directvqa_conf = directvqa_answer_logprobsdict['yn_prob']
     directvqa_hypothesis = llm_model.rephrase_qa_to_statement(
@@ -121,53 +122,55 @@ def run_recoverr_verifyingevidences(
     # region EXTRACT OBJECTS FROM IMAGE
     if 'objdet' in visual_tools:
         image_objects = objdet_model.detect(query_details['image'])
-        objects_statement = f"Objects in the image include {', '.join(image_objects)}."
-        objects_entailment_conf = llm_model.get_entailment_confidence(
-            premise=objects_statement,
-            hypothesis=directvqa_hypothesis
-        )
-        if do_print:
-            print("")
-            print(objects_statement)
-            print(f"P({directvqa_hypothesis} | {objects_statement}) = {objects_entailment_conf:.4f}")
-        objects_evidence = {
-            'question': 'What objects are in the image?',
-            'answer': objects_statement,
-            'vlm_conf': 1.0,
-            'statement': objects_statement,
-            'prediction_entailment_conf': objects_entailment_conf,
-            'counterfactual_prediction_entailment_conf': 0,
-            'relevance': objects_entailment_conf, 
-            'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
-            'is_relevant': True,
-        }
-        initial_evidences.append(objects_evidence)
+        if len(image_objects) > 0:
+            objects_statement = f"Objects in the image include {', '.join(image_objects)}."
+            objects_entailment_conf = llm_model.get_entailment_confidence(
+                premise=objects_statement,
+                hypothesis=directvqa_hypothesis
+            )
+            if do_print:
+                print("")
+                print(objects_statement)
+                print(f"P({directvqa_hypothesis} | {objects_statement}) = {objects_entailment_conf:.4f}")
+            objects_evidence = {
+                'question': 'What objects are in the image?',
+                'answer': objects_statement,
+                'vlm_conf': 1.0,
+                'statement': objects_statement,
+                'prediction_entailment_conf': objects_entailment_conf,
+                'counterfactual_prediction_entailment_conf': 0,
+                'relevance': objects_entailment_conf, 
+                'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
+                'is_relevant': True,
+            }
+            initial_evidences.append(objects_evidence)
     #endregion
 
     # region EXTRACT REGION CAPTIONS FROM IMAGE
     if 'regcapdb' in visual_tools:
         region_captions = regcapdb_model.get_captions_by_imageid(query_details['image_id'])
-        regcap_statement = f"Regions in the image include {', '.join(region_captions)}."
-        regcap_entailment_conf = llm_model.get_entailment_confidence(
-            premise=regcap_statement,
-            hypothesis=directvqa_hypothesis
-        )
-        if do_print:
-            print("")
-            print(regcap_statement)
-            print(f"P({directvqa_hypothesis} | {regcap_statement}) = {regcap_entailment_conf:.4f}")
-        regcap_evidence = {
-            'question': 'Describe some regions in the image.',
-            'answer': regcap_statement,
-            'vlm_conf': 1.0,
-            'statement': regcap_statement,
-            'prediction_entailment_conf': regcap_entailment_conf,
-            'counterfactual_prediction_entailment_conf': 0,
-            'relevance': regcap_entailment_conf, 
-            'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
-            'is_relevant': True,
-        }
-        initial_evidences.append(regcap_evidence)
+        if len(region_captions) > 0:
+            regcap_statement = f"Regions in the image include {', '.join(region_captions)}."
+            regcap_entailment_conf = llm_model.get_entailment_confidence(
+                premise=regcap_statement,
+                hypothesis=directvqa_hypothesis
+            )
+            if do_print:
+                print("")
+                print(regcap_statement)
+                print(f"P({directvqa_hypothesis} | {regcap_statement}) = {regcap_entailment_conf:.4f}")
+            regcap_evidence = {
+                'question': 'Describe some regions in the image.',
+                'answer': regcap_statement,
+                'vlm_conf': 1.0,
+                'statement': regcap_statement,
+                'prediction_entailment_conf': regcap_entailment_conf,
+                'counterfactual_prediction_entailment_conf': 0,
+                'relevance': regcap_entailment_conf, 
+                'is_reliable': True, # if caption_conf >= 1-desired_risk else False,
+                'is_relevant': True,
+            }
+            initial_evidences.append(regcap_evidence)
     #endregion
 
     if do_recoverr is False:
@@ -347,7 +350,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_file", type=str, required=True)
     parser.add_argument("--dataset", type=str, choices=DATASET_REGISTRY.keys(), default='aokvqa')
-    parser.add_argument("--split", type=str, choices=['train', 'val'], default='val')
+    parser.add_argument("--split", type=str, choices=['train', 'val', 'eval'], default='val')
     parser.add_argument("--task_type", type=str, choices=['multichoice', 'direct_answer'], default='direct_answer')
     parser.add_argument("--num_rollouts", type=int, default=1)
     parser.add_argument("--num_examples", type=int, default=-1)
@@ -494,7 +497,7 @@ def main():
         image = data['raw_image']
         image_path = data['image_path']
         score_dict = data['score_dict']
-        choices = data['choices']
+        #choices = data['choices']
 
         for rollout_num in range(args.num_rollouts):
             
@@ -527,11 +530,15 @@ def main():
 
             #answer_found = determine_if_answer_found(question, answer)
             answer_found = True
-            lave_reasoning, lave_score = lave_scorer.compute(
-                prediction=predicted_answer,
-                references=data['reference_answers'],
-                question=question,
-            )
+            if args.dataset != 'sherlock':
+                lave_reasoning, lave_score = lave_scorer.compute(
+                    prediction=predicted_answer,
+                    references=data['reference_answers'],
+                    question=question,
+                )
+            else:
+                lave_reasoning = ''
+                lave_score = score
 
             qid2rollouts[qid].append(
                     {'qid': qid,

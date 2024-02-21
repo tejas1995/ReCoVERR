@@ -185,24 +185,17 @@ class MistralQuestionGenerator:
         self.config = config
         self.device = device
 
-        self.agent_name = config['agent_name']
+        self.qgen_model_name = config['qgen_model_name']
         self.model = AutoModelForCausalLM.from_pretrained(config['model_name'], torch_dtype=torch.float16).to(device)
         self.model.config.sliding_window = 1024
         self.model.eval()
         self.tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
         add_all_special_tokens(self.tokenizer)
 
+        self.questiongen_prompts = yaml.load(open(config['questiongen_prompts_file'], 'r'), Loader=yaml.FullLoader)
         self.questiongen_inference_params = config['questiongen_inference_params']
-        self.answergen_inference_params = config['answergen_inference_params']
 
-        self.verifier_model = AutoModelForSeq2SeqLM.from_pretrained(config['verifier_model_name'], torch_dtype=torch.float16).to(device)
-        self.verifier_tokenizer = AutoTokenizer.from_pretrained(config['verifier_model_name'])
-        yn_tokens = self.verifier_tokenizer.tokenize("yes no")
-        self.yn_token_ids = self.verifier_tokenizer.convert_tokens_to_ids(yn_tokens)
-        logger.info(f"Loaded {config['verifier_model_name']} verifier ({calculate_model_size_gb(self.verifier_model):.2f} GB)")
-        logger.info(f"Initialized {self.agent_name} Agent ({calculate_model_size_gb(self.model):.2f} GB)")
-
-        logger.info("-"*100)
+        logger.info(f"Initialized {self.qgen_model_name} QuestionGenerator")
 
     def __str__(self) -> str:
         return f"Agent: {self.agent_name}"
@@ -230,40 +223,40 @@ class MistralQuestionGenerator:
         #prompt_string += 'Assistant: '
         return prompt_string
     
-    def generate_multiple_nextquestions(self, state: List, num_questions: int = 1, include_last_agent_guess = False) -> str:
+
+    def generate_supportingevidence_questions(
+        self,
+        target_question: str, 
+        evidences: List[Dict], 
+        num_questions: int = 1, 
+        possible_answer: str = None
+    ) -> List[str]:
         init_sys_prompt = {
             'role': 'system', 
             'content': self.questiongen_prompts['init_sys_prompt']
         }
-        final_sys_prompt = {
-            'role': 'system', 
-            'content': self.questiongen_prompts['final_sys_prompt'].replace('NUM_QUESTIONS', str(num_questions)).replace('VISUAL_QUERY', state.visual_query.question)
-        }
-
-        input_messages = [init_sys_prompt]
-        input_messages += state.messages[1:] + [final_sys_prompt]
-        prompt_string = self.stringify_questiongen_prompt(input_messages)
-        input_ids = self.tokenizer(prompt_string, return_tensors='pt', truncation=True).input_ids.to(self.device)
-        outputs = self.model.generate(input_ids, num_return_sequences=num_questions, **self.questiongen_inference_params)
-        questions = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        pdb.set_trace()
-        return questions
-
-    def generate_supportingevidence_questions(self, state: List, num_questions: int = 1, possible_answer: str = None) -> str:
-        init_sys_prompt = {
-            'role': 'system', 
-            'content': self.questiongen_prompts['init_sys_prompt']
-        }
-        final_sys_prompt = self.questiongen_prompts['final_sys_prompt'].replace('NUM_QUESTIONS', str(num_questions)).replace('VISUAL_QUERY', state.visual_query.question).replace('POSSIBLE_ANSWER', possible_answer)
+        final_sys_prompt = self.questiongen_prompts['final_sys_prompt']
+        final_sys_prompt = final_sys_prompt.replace('TARGET_QUESTION', target_question)
+        final_sys_prompt = final_sys_prompt.replace('NUM_QUESTIONS', str(num_questions))
+        if possible_answer is not None:
+            final_sys_prompt = final_sys_prompt.replace('POSSIBLE_ANSWER', possible_answer)
         final_sys_prompt = {
             'role': 'system', 
             'content': final_sys_prompt
         }
 
         input_messages = [init_sys_prompt]
-        for example in self.in_context_examples:
-            input_messages += example
-        input_messages += state.messages + [final_sys_prompt]
+        if len(evidences) > 0:
+            input_messages.append({
+                'role': 'user',
+                'content': 'What you already know about the image:'
+            })
+            for e in evidences:
+                input_messages.append({
+                    'role': 'user', 
+                    'content': e['statement']
+                })
+        input_messages.append(final_sys_prompt)
 
         # Transformer ChatGPT-style messages into Mistral-style messages
         new_input_messages = []
@@ -299,8 +292,129 @@ class MistralQuestionGenerator:
         questions = [q for q in questions if q.endswith('?')]
         return questions
 
+class TuluQuestionGenerator:
+
+    def __init__(self, config: Dict, device: torch.device):
+        #super().__init__(config, device)
+        self.config = config
+        self.device = device
+
+        self.qgen_model_name = config['qgen_model_name']
+        self.model = AutoModelForCausalLM.from_pretrained(config['model_name'], torch_dtype=torch.float16).to(device)
+        self.model.config.sliding_window = 1024
+        self.model.eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
+        add_all_special_tokens(self.tokenizer)
+
+        self.questiongen_prompts = yaml.load(open(config['questiongen_prompts_file'], 'r'), Loader=yaml.FullLoader)
+        self.questiongen_inference_params = config['questiongen_inference_params']
+
+        logger.info(f"Initialized {self.qgen_model_name} QuestionGenerator")
+
+    def __str__(self) -> str:
+        return f"Agent: {self.agent_name}"
+
+    def add_tokens(self, new_tokens: List):
+        self.tokenizer.add_tokens(new_tokens)
+        logger.info(f"Added new tokens to Agent: {', '.join(new_tokens)}")
+
+    def remove_question_number(self, question):
+        return re.sub(r'[0-9]+\.', '', question).strip()
+
+    def stringify_questiongen_prompt(self, input_messages):
+        prompt_string = ""
+        for message in input_messages:
+            if message['role'] == 'system':
+                prompt_string += "[INST] " + message['content'] + "[/INST]"
+            elif message['role'] == 'user':
+                if message['content'] == "Describe the image":
+                    prompt_string += message['content'] + " \n"
+                else:
+                    prompt_string += "Answer: " + message['content'] + " \n "
+            elif message['role'] == 'assistant':
+                prompt_string += "Question: " + message['content'] + " \n"
+        assert input_messages[-1]['role'] != 'assistant'
+        #prompt_string += 'Assistant: '
+        return prompt_string
+    
+
+    def generate_supportingevidence_questions(
+        self,
+        target_question: str, 
+        evidences: List[Dict], 
+        num_questions: int = 1, 
+        possible_answer: str = None
+    ) -> List[str]:
+        init_sys_prompt = {
+            'role': 'system', 
+            'content': self.questiongen_prompts['init_sys_prompt']
+        }
+        final_sys_prompt = self.questiongen_prompts['final_sys_prompt']
+        final_sys_prompt = final_sys_prompt.replace('TARGET_QUESTION', target_question)
+        final_sys_prompt = final_sys_prompt.replace('NUM_QUESTIONS', str(num_questions))
+        if possible_answer is not None:
+            final_sys_prompt = final_sys_prompt.replace('POSSIBLE_ANSWER', possible_answer)
+        final_sys_prompt = {
+            'role': 'system', 
+            'content': final_sys_prompt
+        }
+
+        input_messages = [init_sys_prompt]
+        if len(evidences) > 0:
+            input_messages.append({
+                'role': 'user',
+                'content': 'What you already know about the image:'
+            })
+            for e in evidences:
+                input_messages.append({
+                    'role': 'user', 
+                    'content': e['statement']
+                })
+        input_messages.append(final_sys_prompt)
+
+        # Transformer ChatGPT-style messages into Mistral-style messages
+        input_string = "<|user|> \n"
+        for m in input_messages:
+            if m['role'] == 'system':
+                input_string += " \n " + m['content'] + " \n\n"
+            else:
+                input_string += m['content'] + " \n"
+                continue
+                if m['role'] == 'user':
+                    if m['content'].startswith("Visual Query:"):
+                        input_string += m['content'] + " \n"
+                    else:
+                        input_string += "Answer: " + m['content'] + " \n "
+                elif m['role'] == 'assistant':
+                    input_string += "Question: " + m['content'] + " \n "
+        input_string += "<|assistant|> \n"
+        pdb.set_trace()
+
+        #prompt_string = self.stringify_questiongen_prompt(input_messages)
+        input_ids_encoded = self.tokenizer([input_string], return_tensors="pt").input_ids.to(self.device)
+        outputs = self.model.generate(input_ids_encoded, **self.questiongen_inference_params)
+        
+        generated_ids = outputs[0, input_ids_encoded.shape[1]:]
+        questions = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        questions = [x.strip() for x in questions.split('\n')]
+        questions = [q for q in questions if len(q) > 0]
+        questions = [self.remove_question_number(q) for q in questions]
+        questions = [q for q in questions if q.endswith('?')]
+        return questions
+
 
 QGEN_CLASS_MAP = {
     'gpt': GPTQuestionGenerator,
-    #'mistral': MistralQuestionGenerator
+    'mistral': MistralQuestionGenerator,
+    'tulu': TuluQuestionGenerator
 }
+
+if __name__ == "__main__":
+    
+    #config = yaml.load(open('/net/nfs.cirrascale/mosaic/tejass/code/ReCoVERR/configs/qgen_configs/mistral7b-verifying_prompt_detailed.yaml', 'r'), Loader=yaml.FullLoader)
+    config = yaml.load(open('/net/nfs.cirrascale/mosaic/tejass/code/ReCoVERR/configs/qgen_configs/tulu2_7b-verifying_prompt_detailed.yaml', 'r'), Loader=yaml.FullLoader)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    #qgen = GPTQuestionGenerator(config, device)
+    #qgen = MistralQuestionGenerator(config, device)
+    qgen = TuluQuestionGenerator(config, device)
+    pdb.set_trace()

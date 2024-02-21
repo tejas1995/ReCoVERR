@@ -1,0 +1,7 @@
+qgen_model_name: "Tulu2-7B"
+model_name: "allenai/tulu-2-7b"
+questiongen_inference_params:
+  max_new_tokens: 200
+  temperature: 0.5
+  do_sample: True
+questiongen_prompts_file: "/net/nfs.cirrascale/mosaic/tejass/data/instruction_prompts/recoverr_prompts/questiongen_prompts_recoverr_verifyingevidences-verifying_prompt_detailed.json"

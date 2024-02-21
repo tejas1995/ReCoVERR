@@ -33,8 +33,15 @@ class QwenVLRegionCaptionDB(nn.Module):
         logger.info(f"Loaded {self.db_display_name} database")
 
     def get_captions_by_imageid(self, image_id: str) -> str:
-        image_id = int(image_id)
-        region_captions = self.imageid2regioncaps[image_id]
+        try:
+            if 'okvqa' in self.region_captions_file:
+                image_id = int(image_id)
+            region_captions = self.imageid2regioncaps[image_id]
+            region_captions = [c.lower().replace('.', '') for c in region_captions]
+            region_captions = [c for c in region_captions if len(c) > 0]
+            region_captions = region_captions#[:5]
+        except:
+            region_captions = []
         return region_captions
 
 REGCAPDB_CLASS_MAP = {
