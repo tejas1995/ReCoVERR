@@ -1,0 +1,5 @@
+model_class: "llava"
+model_shorthand: "llava_plus_7b"
+class_name: "llava"
+model_display_name: "LLaVA-1.5-7B"
+pt_model_name: "llava-hf/llava-1.5-7b-hf"

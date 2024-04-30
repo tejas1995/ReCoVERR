@@ -1,13 +1,11 @@
 import pdb
 from typing import List
 import pickle as pkl
+import yaml
 
 import numpy as np
 import torch
 from torch import nn
-from lavis.models import load_model_and_preprocess, load_preprocess
-from lavis.common.registry import registry
-from omegaconf import OmegaConf
 
 from utils.mem_utils import calculate_model_size_gb
 
@@ -20,6 +18,10 @@ logging.basicConfig(
         level=logging.INFO)
 
 def load_model_with_custom_configs(name, config, is_eval=False, device="cpu"):
+    from lavis.models import load_model_and_preprocess, load_preprocess
+    from lavis.common.registry import registry
+    from omegaconf import OmegaConf
+
     model_cls = registry.get_model_class(name)
     cfg = OmegaConf.create(config)
     if 'model_config' not in config:
@@ -355,6 +357,138 @@ class BLIP(nn.Module):
         #print(f"Confidence in hypothesis given the evidences: {yn_probs[0].item():.4f}")
         return yn_probs.tolist(), yn_logits.tolist()
 
+class LLaVA(nn.Module):
+    def __init__(self, config, device):
+        from transformers import AutoProcessor, LlavaForConditionalGeneration
+
+        super(LLaVA, self).__init__()
+
+        self.config = config
+        self.model_name = config['class_name']
+        self.display_name = config['model_display_name']
+        self.model = LlavaForConditionalGeneration.from_pretrained(config['pt_model_name'], torch_dtype=torch.float16).to(device)
+        self.processor = AutoProcessor.from_pretrained(config['pt_model_name'])
+
+        self.vqa_inference_params = {}
+        yn_tokens = self.processor.tokenizer.tokenize("yesYes Yesyesno noNo No")
+        yn_token_ids = self.processor.tokenizer.convert_tokens_to_ids(yn_tokens)
+        self.yes_token_ids = yn_token_ids[:4]
+        self.no_token_ids = yn_token_ids[4:]
+
+        num_params = sum(p.numel() for p in self.model.parameters())
+        num_trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad is True)
+
+        self.device = device
+        self.use_confidence_calibrator = False
+        logger.info(f"Loaded LLaVA (model={self.display_name})!")
+        logger.info("Model size: {:.2f}B parameters ({:.2f}B trainable), {:.2f}GB in memory".format(num_params*10**-9, num_trainable_params*10**-9, calculate_model_size_gb(self.model)))    
+
+    def set_vqa_inference_params(self, vqa_inference_params):
+        self.vqa_inference_params = vqa_inference_params
+
+    def set_caption_inference_params(self, caption_inference_params):
+        self.caption_inference_params = caption_inference_params
+    
+    def set_confidence_calibrator(self, calibrator_model_path):
+        self.use_confidence_calibrator = True
+        self.confidence_calibrator = pkl.load(open(calibrator_model_path, "rb"))
+        logger.info(f"Loaded VLM confidence calibrator from {calibrator_model_path}!")
+
+    def forward(self, batch):
+        output_dict = self.model(batch)
+        loss = output_dict["loss"]
+        return loss
+
+    def generate(self, batch):
+        with torch.no_grad():
+            output = self.model.generate(batch, **self.vqa_inference_params)
+        output = [x.lower() for x in output]
+        return output
+
+    def get_answer_confidence(self, raw_image, questions, answers, use_calibrator=True):
+        prompts = [f"USER: <image> Question: {q} \n" \
+            f"Answer: {a} \n" \
+            f"Is the given answer correct for the question? Options: yes, no. ASSISTANT:" for q, a in zip(questions, answers)]
+        inputs = self.processor(text=prompts, images=raw_image, return_tensors="pt").to(self.device)        
+        outputs = self.model.generate(**inputs, max_new_tokens=1, return_dict_in_generate=True, output_scores=True)
+        logits = outputs.scores[0]
+
+        token_probs = nn.Softmax(dim=-1)(logits)
+        yes_probs = token_probs[:, self.yes_token_ids].sum(dim=-1)#.tolist()
+        no_probs = token_probs[:, self.no_token_ids].sum(dim=-1)#.tolist()
+        #yn_logits = torch.cat([yes_logits.unsqueeze(1), no_logits.unsqueeze(1)], dim=1)
+        yn_logits = torch.cat([yes_probs.unsqueeze(1), no_probs.unsqueeze(1)], dim=1)
+        if self.use_confidence_calibrator and use_calibrator == True:
+            yn_logits = yn_logits.cpu().detach().to(torch.float32).numpy()
+            yn_probs = self.confidence_calibrator.predict_proba(yn_logits)[:, 1]
+        else:
+            yn_probs = [(y/(y+n)).item() for y, n in zip(yes_probs, no_probs)]
+        #print(f"yes_prob: {yes_probs[0]:.4f}, no_prob: {no_probs[0]:.4f}, sum: {yes_probs[0] + no_probs[0]:.4f}")
+        return yn_probs, yn_logits.tolist()
+
+    def ask(self, raw_image, question, use_calibrator=True, **kwargs):
+        prompt = f"USER: <image>\nAnswer the question using a single word or phrase: {question} ASSISTANT:"
+        inputs = self.processor(text=prompt, images=raw_image, return_tensors="pt").to(self.device)
+        outputs = self.model.generate(**inputs, **self.vqa_inference_params, **kwargs)
+        transition_scores = self.model.compute_transition_scores(
+            outputs.sequences, outputs.scores, outputs.beam_indices, normalize_logits=True
+            #outputs.sequences, outputs.scores, normalize_logits=True
+        )
+        generated_ids = outputs.sequences[:, inputs.input_ids.shape[-1]:]
+        answer, logprobs_dict = self.get_answer_with_probability(
+            transition_scores[0].tolist(), 
+            generated_ids[0].tolist(), 
+        )
+        #print(f"question: {question}, answer: {answer}")
+        yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer], use_calibrator=use_calibrator)
+        logprobs_dict["yn_prob"] = yn_probs[0]
+        logprobs_dict["yn_logits"] = yn_logits[0]
+        #pdb.set_trace()
+        return answer.lower(), logprobs_dict
+    
+    def get_answer_with_probability(self, scores, gen_ids):
+        pad_token_id = self.processor.tokenizer.pad_token_id
+        filtered_tokens = [(x, y) for x, y in zip(gen_ids, scores) if x != pad_token_id]        # Remove pad tokens
+        gen_ids = [x[0] for x in filtered_tokens]
+        answer = self.processor.decode(gen_ids, skip_special_tokens=True)    
+        answer_tokens = self.processor.tokenizer.convert_ids_to_tokens(gen_ids)
+        answer_token_logprobs = [x[1] for x in filtered_tokens]
+        if len(answer_tokens) == 1:      # SEP token only
+            answer_tokens = ["", "[SEP]"]
+            answer_token_logprobs = [-np.inf, 0.0]
+
+        first_token_logprob = answer_token_logprobs[0]
+        first_token_prob = np.exp(first_token_logprob)
+        min_token_logprob =  min(answer_token_logprobs)
+        min_token_prob = np.exp(min_token_logprob)
+        mean_token_logprob = sum(answer_token_logprobs[:-1]) / (len(answer_token_logprobs) - 1)
+        exp_mean_token_logprob = np.exp(mean_token_logprob)
+        mean_token_prob = sum(np.exp(answer_token_logprobs[:-1])) / (len(answer_token_logprobs) - 1)
+        token_probs = np.exp(answer_token_logprobs).tolist()
+        prod_token_probs = np.prod(np.exp(answer_token_logprobs))
+        logprobs_dict = {
+            "first_token_logprob": first_token_logprob,
+            "first_token_prob": first_token_prob,
+            "min_token_logprob": min_token_logprob,
+            "min_token_prob": min_token_prob,
+            "mean_token_logprob": mean_token_logprob,
+            "mean_token_prob": mean_token_prob,
+            "exp_mean_token_logprob": exp_mean_token_logprob, 
+            "answer_token_logprobs": answer_token_logprobs,
+            "token_probs": token_probs,
+            "answer_tokens": answer_tokens,
+            "prod_token_probs": prod_token_probs
+        }
+        return answer, logprobs_dict
+
 VLM_CLASS_MAP = {
-    "blip": BLIP
+    "blip": BLIP,
+    "llava": LLaVA
 }
+
+if __name__ == '__main__':
+    config_file = "/home/tejas/projects/ReCoVERR/configs/vlm_configs/llava_1.5_7b.yaml"
+    config = yaml.safe_load(open(config_file, "r"))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = LLaVA(config, device)
+    pdb.set_trace()
