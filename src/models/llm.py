@@ -84,7 +84,7 @@ class T5LLM:
         input_ids = self.tokenizer(prompt, return_tensors='pt').input_ids.to(self.device)
         output_ids = self.model.generate(input_ids, **self.rephrasing_inference_params)
         rephrased_question = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        pdb.set_trace()
+        #pdb.set_trace()
         if '?' in rephrased_question:
             return f"{question} {answer}."
         else:
@@ -106,7 +106,7 @@ class T5LLM:
         #    logger.info(f"Answer: {a}")
         #    logger.info(f"Rephrased question: {r}")
         #    logger.info("-"*100)
-        pdb.set_trace()
+        #pdb.set_trace()
         for i, r in enumerate(rephrased_questions):
             if '?' in r:
                 rephrased_questions[i] = f"{questions[i]} {answers[i]}."

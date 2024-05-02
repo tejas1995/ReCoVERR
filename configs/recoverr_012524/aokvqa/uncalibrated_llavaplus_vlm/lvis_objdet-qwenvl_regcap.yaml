@@ -1,4 +1,4 @@
-folder_name: "uncalibrated_instructblipft5xl_vlm/chatgpt_qgen-flant5xl_llm"
+folder_name: "uncalibrated_llavaplus7b_vlm/chatgpt_qgen-flant5xl_llm"
 exp_name: "lvis_objdet-qwenvl_regcap-verifying_prompt_detailed"
 
 qgen:
@@ -33,14 +33,14 @@ objdet:
 
 regcapdb:
   class_name: "qwenvl"
-  model_config_path: "/home/tejas/projects/ReCoVERR/configs/regcapdb_configs/qwenvl_regioncaps.yaml"
+  model_config_path: "/home/tejas/projects/ReCoVERR/configs/regcapdb_configs/qwenvl_regioncaps_aokvqa_val.yaml"
 
 recoverr:
   do_recoverr: True
   max_evidence_collection_turns: 10
   questions_generated_per_turn: 10
-  desired_risk: 0.1   # 0.1, 0.2
-  vqaconfthresh_at_risk: 0.8  # 0.8, 0.66
+  desired_risk: 0.2   # 0.2
+  vqaconfthresh_at_risk: 0.64  # 0.64
   min_entailment_conf: 0.9
   defeasibility_delta: 0.2
   visual_tools: ['imcap', 'objdet', 'regcapdb']

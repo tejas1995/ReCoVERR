@@ -481,14 +481,173 @@ class LLaVA(nn.Module):
         }
         return answer, logprobs_dict
 
+    def caption(self, raw_image, caption_prompt="Please caption this image", use_calibrator=False, **kwargs):
+        prompt = f"USER: <image>\n{caption_prompt} ASSISTANT:"
+        inputs = self.processor(text=prompt, images=raw_image, return_tensors="pt").to(self.device)
+        outputs = self.model.generate(**inputs, **self.caption_inference_params, **kwargs)
+        transition_scores = self.model.compute_transition_scores(
+            outputs.sequences, outputs.scores, outputs.beam_indices, normalize_logits=True
+            #outputs.sequences, outputs.scores, normalize_logits=True
+        )
+        generated_ids = outputs.sequences[:, inputs.input_ids.shape[-1]:]
+        answer, logprobs_dict = self.get_answer_with_probability(
+            transition_scores[0].tolist(), 
+            generated_ids[0].tolist(), 
+        )
+        #print(f"question: {question}, answer: {answer}")
+        yn_probs, yn_logits = self.get_answer_confidence(raw_image, [caption_prompt], [answer], use_calibrator=use_calibrator)
+        logprobs_dict["yn_prob"] = yn_probs[0]
+        logprobs_dict["yn_logits"] = yn_logits[0]
+        return answer.lower(), logprobs_dict
+
+class QwenVL(nn.Module):
+    def __init__(self, config, device):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        super(QwenVL, self).__init__()
+
+        self.config = config
+        self.model_name = config['class_name']
+        self.display_name = config['model_display_name']
+        self.model = AutoModelForCausalLM.from_pretrained(config['pt_model_name'], trust_remote_code=True, torch_dtype=torch.float16).to(device)
+        self.tokenizer = AutoTokenizer.from_pretrained(config['pt_model_name'], trust_remote_code=True)
+
+        self.vqa_inference_params = {}
+        yn_tokens = self.tokenizer.tokenize(" yes Yes no No")
+        yn_token_ids = self.tokenizer.convert_tokens_to_ids(yn_tokens)
+        self.yes_token_ids = yn_token_ids[:2]
+        self.no_token_ids = yn_token_ids[2:]
+
+        num_params = sum(p.numel() for p in self.model.parameters())
+        num_trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad is True)
+
+        self.device = device
+        self.use_confidence_calibrator = False
+        logger.info(f"Loaded QwenVL (model={self.display_name})!")
+        logger.info("Model size: {:.2f}B parameters ({:.2f}B trainable), {:.2f}GB in memory".format(num_params*10**-9, num_trainable_params*10**-9, calculate_model_size_gb(self.model)))
+
+    def set_vqa_inference_params(self, vqa_inference_params):
+        self.vqa_inference_params = vqa_inference_params
+
+    def set_caption_inference_params(self, caption_inference_params):
+        self.caption_inference_params = caption_inference_params
+    
+    def set_confidence_calibrator(self, calibrator_model_path):
+        self.use_confidence_calibrator = True
+        self.confidence_calibrator = pkl.load(open(calibrator_model_path, "rb"))
+        logger.info(f"Loaded VLM confidence calibrator from {calibrator_model_path}!")
+
+    def forward(self, batch):
+        output_dict = self.model(batch)
+        loss = output_dict["loss"]
+        return loss
+
+    def generate(self, batch):
+        with torch.no_grad():
+            output = self.model.generate(batch, **self.vqa_inference_params)
+        output = [x.lower() for x in output]
+        return output
+
+    def get_answer_confidence(self, raw_image, questions, answers, use_calibrator=True, **kwargs):
+        query_details = kwargs.pop("query_details", None)
+        #prompts = [f"USER: <image> Question: {q} \n" \
+        #    f"Answer: {a} \n" \
+        #    f"Is the given answer correct for the question? Options: yes, no. ASSISTANT:" for q, a in zip(questions, answers)]
+        query = [self.tokenizer.from_list_format([
+            {'image': query_details['image_path']},
+            {'text': f"Question: {q} \n" \
+            f"Answer: {a} \n" \
+            f"Is the given answer correct for the question? Answer yes or no: "},
+        ]) for q, a in zip(questions, answers)]
+        inputs = self.tokenizer(query, return_tensors='pt').to(self.device)
+        outputs = self.model.generate(**inputs, max_new_tokens=1, return_dict_in_generate=True, output_scores=True)
+        logits = outputs.scores[0]
+
+        token_probs = nn.Softmax(dim=-1)(logits)
+        yes_probs = token_probs[:, self.yes_token_ids].sum(dim=-1)#.tolist()
+        no_probs = token_probs[:, self.no_token_ids].sum(dim=-1)#.tolist()
+        #yn_logits = torch.cat([yes_logits.unsqueeze(1), no_logits.unsqueeze(1)], dim=1)
+        yn_logits = torch.cat([yes_probs.unsqueeze(1), no_probs.unsqueeze(1)], dim=1)
+        if self.use_confidence_calibrator and use_calibrator == True:
+            yn_logits = yn_logits.cpu().detach().to(torch.float32).numpy()
+            yn_probs = self.confidence_calibrator.predict_proba(yn_logits)[:, 1]
+        else:
+            yn_probs = [(y/(y+n)).item() for y, n in zip(yes_probs, no_probs)]
+        #print(f"yes_prob: {yes_probs[0]:.4f}, no_prob: {no_probs[0]:.4f}, sum: {yes_probs[0] + no_probs[0]:.4f}")
+        return yn_probs, yn_logits.tolist()
+
+    def ask(self, raw_image, question, use_calibrator=True, **kwargs):
+        query_details = kwargs.pop('query', None)
+        #pdb.set_trace()
+        query = self.tokenizer.from_list_format([
+            {'image': query_details['image_path']},
+            {'text': f"Question: {question} Short answer:"},
+        ])
+        inputs = self.tokenizer(query, return_tensors='pt').to(self.device)
+        
+        outputs = self.model.generate(**inputs, **self.vqa_inference_params, **kwargs)
+        transition_scores = self.model.compute_transition_scores(
+            outputs.sequences, outputs.scores, outputs.beam_indices, normalize_logits=True
+            #outputs.sequences, outputs.scores, normalize_logits=True
+        )
+        generated_ids = outputs.sequences[:, inputs.input_ids.shape[-1]:]
+        answer, logprobs_dict = self.get_answer_with_probability(
+            transition_scores[0].tolist(), 
+            generated_ids[0].tolist(), 
+        )
+        answer = answer.lower().strip()
+        #print(f"question: {question}, answer: {answer}")
+        yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer], use_calibrator=use_calibrator, query_details=query_details)
+        logprobs_dict["yn_prob"] = yn_probs[0]
+        logprobs_dict["yn_logits"] = yn_logits[0]
+        #pdb.set_trace()
+        return answer.lower(), logprobs_dict
+    
+    def get_answer_with_probability(self, scores, gen_ids):
+        pad_token_id = self.tokenizer.pad_token_id
+        filtered_tokens = [(x, y) for x, y in zip(gen_ids, scores) if x != pad_token_id]        # Remove pad tokens
+        gen_ids = [x[0] for x in filtered_tokens]
+        answer = self.tokenizer.decode(gen_ids, skip_special_tokens=True)    
+        answer_tokens = self.tokenizer.convert_ids_to_tokens(gen_ids)
+        answer_tokens = [b.decode('utf-8') if type(b) == bytes else b for b in answer_tokens]
+        answer_token_logprobs = [x[1] for x in filtered_tokens]
+        if len(answer_tokens) == 1:      # SEP token only
+            answer_tokens = ["", "[SEP]"]
+            answer_token_logprobs = [-np.inf, 0.0]
+
+        first_token_logprob = answer_token_logprobs[0]
+        first_token_prob = np.exp(first_token_logprob)
+        min_token_logprob =  min(answer_token_logprobs)
+        min_token_prob = np.exp(min_token_logprob)
+        mean_token_logprob = sum(answer_token_logprobs[:-1]) / (len(answer_token_logprobs) - 1)
+        exp_mean_token_logprob = np.exp(mean_token_logprob)
+        mean_token_prob = sum(np.exp(answer_token_logprobs[:-1])) / (len(answer_token_logprobs) - 1)
+        token_probs = np.exp(answer_token_logprobs).tolist()
+        prod_token_probs = np.prod(np.exp(answer_token_logprobs))
+        logprobs_dict = {
+            "first_token_logprob": first_token_logprob,
+            "first_token_prob": first_token_prob,
+            "min_token_logprob": min_token_logprob,
+            "min_token_prob": min_token_prob,
+            "mean_token_logprob": mean_token_logprob,
+            "mean_token_prob": mean_token_prob,
+            "exp_mean_token_logprob": exp_mean_token_logprob, 
+            "answer_token_logprobs": answer_token_logprobs,
+            "token_probs": token_probs,
+            "answer_tokens": answer_tokens,
+            "prod_token_probs": prod_token_probs
+        }
+        return answer, logprobs_dict
+
 VLM_CLASS_MAP = {
     "blip": BLIP,
-    "llava": LLaVA
+    "llava": LLaVA,
+    "qwenvl": QwenVL
 }
 
 if __name__ == '__main__':
-    config_file = "/home/tejas/projects/ReCoVERR/configs/vlm_configs/llava_1.5_7b.yaml"
+    config_file = "/home/tejas/projects/ReCoVERR/configs/vlm_configs/qwen_vl.yaml"
     config = yaml.safe_load(open(config_file, "r"))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LLaVA(config, device)
+    model = QwenVL(config, device)
     pdb.set_trace()
