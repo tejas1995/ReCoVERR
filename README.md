@@ -82,7 +82,7 @@ python -m run_recoverr --config_file ${RECOVERR_CONFIG_FILE} \
 If you use this codebase, please cite the following paper:
 
 ```
-@inproceedings{srinivasan2022selective,
+@inproceedings{srinivasan2024selective,
   title={Selective" Selective Prediction": Reducing Unnecessary Abstention in Vision-Language Reasoning},
   author={Srinivasan, Tejas and Hessel, Jack and Gupta, Tanmay and Lin, Bill Yuchen and Choi, Yejin and Thomason, Jesse and Chandu, Khyathi Raghavi},
   booktitle={Findings of the Association for Computational Linguistics (ACL)},
