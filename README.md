@@ -67,7 +67,7 @@ After extracting the VLM's predictions for the calibration and evaluation sets, 
 
 ### Running ReCoVERR
 
-Create a config file in `configs/recoverr_configs/` (such as [this one](https://github.com/tejas1995/ReCoVERR/src/configs/recoverr_configs/aokvqa/blip2ft5xl_uncalibrated_vlm/chatgpt_qgen-flant5xl_llm-lvis_objdet.yaml)).
+Create a config file in `configs/recoverr_configs/` (such as [this one](https://github.com/tejas1995/ReCoVERR/blob/main/src/configs/recoverr_configs/aokvqa/blip2ft5xl_uncalibrated_vlm/chatgpt_qgen-flant5xl_llm-lvis_objdet.yaml)).
 
 To run ReCoVERR, use the `run_recoverr.py` script as follows:
 ```
