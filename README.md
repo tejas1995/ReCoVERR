@@ -1,6 +1,6 @@
 # ReCoVERR
 
-
+This is the code for the paper [Selective "Selective Prediction": Reducing Unnecessary Abstention in Vision-Language Reasoning](https://arxiv.org/abs/2402.15610), published in ACL Findings 2024.
 ## Installation
 
 Create conda environment
