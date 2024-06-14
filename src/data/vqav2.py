@@ -22,8 +22,8 @@ class VQAv2Dataset(Dataset):
 
     def __init__(self, split, mode='q2a', vis_processors=None, text_processors=None, type='direct'):
 
-        data_dir = '/net/nfs.cirrascale/mosaic/tejass/data/vqav2'
-        images_dir = '/net/nfs.cirrascale/mosaic/tejass/data/ms-coco/'
+        data_dir = '/home/shared/MCL/vqav2/'
+        images_dir = '/home/tejas/data/recoverr/ms-coco/'
         image_filenames = os.listdir(images_dir)
         self.name = 'VQAv2'
         self.mode = mode

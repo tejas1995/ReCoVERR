@@ -48,7 +48,6 @@ class BLIP(nn.Module):
         super(BLIP, self).__init__()
 
         self.config = config
-        self.model_name = config['class_name']
         self.display_name = config['model_display_name']
         load_config = config["pt_model_load"]
         self.model, self.vis_processors, self.text_processors = load_model_with_custom_configs(
@@ -60,8 +59,6 @@ class BLIP(nn.Module):
         yn_tokens = self.model.t5_tokenizer.tokenize("yes no")
         self.yn_token_ids = self.model.t5_tokenizer.convert_tokens_to_ids(yn_tokens)
 
-        #preproc_config = OmegaConf.create(config['preprocess_config'])
-        #self.vis_processors, self.text_processors = load_preprocess(preproc_config)
         num_params = sum(p.numel() for p in self.model.parameters())
         num_trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad is True)
 
@@ -137,6 +134,8 @@ class BLIP(nn.Module):
         return answer
 
     def ask(self, raw_image, question, use_calibrator=True, **kwargs):
+        if "query" in kwargs:
+            kwargs.pop("query")
         image = self.vis_processors["eval"](raw_image).unsqueeze(0).to(self.device)
         prompt = f"Question: {question} Short answer:"
         output = self.model.generate({"image": image, "prompt": prompt}, **self.vqa_inference_params, **kwargs)
@@ -153,8 +152,8 @@ class BLIP(nn.Module):
                     generated_ids[0].tolist(), 
                 )
             yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer], use_calibrator=use_calibrator)
-            logprobs_dict["yn_prob"] = yn_probs[0]
-            logprobs_dict["yn_logits"] = yn_logits[0]
+            logprobs_dict["self_prompting_conf"] = yn_probs[0]
+            logprobs_dict["self_prompting_conf"] = yn_logits[0]
             return answer.lower(), logprobs_dict
 
         else:
@@ -177,7 +176,7 @@ class BLIP(nn.Module):
                     generated_ids[0].tolist(), 
                 )
             yn_probs, yn_logits = self.get_answer_confidence(raw_image, [prompt], [answer])
-            logprobs_dict["yn_prob"] = yn_probs[0]
+            logprobs_dict["self_prompting_conf"] = yn_probs[0]
             logprobs_dict["yn_logits"] = yn_logits[0]#.tolist()
             return f"An image of {answer.lower()}.", logprobs_dict
 
@@ -215,9 +214,9 @@ class BLIP(nn.Module):
 
             yn_probs, yn_logits = self.get_answer_confidence(raw_image, questions, answers)
             for i, yn_prob in enumerate(yn_probs):
-                logprobs_dicts[i]["yn_prob"] = yn_prob
+                logprobs_dicts[i]["self_prompting_conf"] = yn_prob
                 logprobs_dicts[i]["yn_logits"] = yn_logits
-            confs = [logprobs_dict["yn_prob"] for logprobs_dict in logprobs_dicts]
+            confs = [logprobs_dict["self_prompting_conf"] for logprobs_dict in logprobs_dicts]
             return answers, logprobs_dicts
 
     def ask_questions_batched(self, raw_images: List, questions: List[str], **kwargs):
@@ -253,9 +252,8 @@ class BLIP(nn.Module):
 
             yn_probs, yn_logits = self.get_answer_confidence(raw_image, questions, answers)
             for i, yn_prob in enumerate(yn_probs):
-                logprobs_dicts[i]["yn_prob"] = yn_prob
+                logprobs_dicts[i]["self_prompting_conf"] = yn_prob
                 logprobs_dicts[i]["yn_logits"] = yn_logits
-            confs = [logprobs_dict["yn_prob"] for logprobs_dict in logprobs_dicts]
             return answers, logprobs_dicts
 
     def ask_multiplequestions_samplemultianswers(self, raw_image, questions: List[str], num_answers, **kwargs):
@@ -289,7 +287,7 @@ class BLIP(nn.Module):
 
             yn_probs = self.get_answer_confidence(raw_image, questions, answers)
             for i, yn_prob in enumerate(yn_probs):
-                logprobs_dicts[i]["yn_prob"] = yn_prob
+                logprobs_dicts[i]["self_prompting_conf"] = yn_prob
             return answers, logprobs_dicts
 
     def ask_multianswers(self, raw_image, question, num_answers, **kwargs):
@@ -364,7 +362,6 @@ class LLaVA(nn.Module):
         super(LLaVA, self).__init__()
 
         self.config = config
-        self.model_name = config['class_name']
         self.display_name = config['model_display_name']
         self.model = LlavaForConditionalGeneration.from_pretrained(config['pt_model_name'], torch_dtype=torch.float16).to(device)
         self.processor = AutoProcessor.from_pretrained(config['pt_model_name'])
@@ -409,7 +406,8 @@ class LLaVA(nn.Module):
         prompts = [f"USER: <image> Question: {q} \n" \
             f"Answer: {a} \n" \
             f"Is the given answer correct for the question? Options: yes, no. ASSISTANT:" for q, a in zip(questions, answers)]
-        inputs = self.processor(text=prompts, images=raw_image, return_tensors="pt").to(self.device)        
+        images = [raw_image for _ in range(len(questions))]
+        inputs = self.processor(text=prompts, images=images, padding=True, return_tensors="pt").to(self.device)        
         outputs = self.model.generate(**inputs, max_new_tokens=1, return_dict_in_generate=True, output_scores=True)
         logits = outputs.scores[0]
 
@@ -427,6 +425,8 @@ class LLaVA(nn.Module):
         return yn_probs, yn_logits.tolist()
 
     def ask(self, raw_image, question, use_calibrator=True, **kwargs):
+        if "query" in kwargs:
+            kwargs.pop("query")
         prompt = f"USER: <image>\nAnswer the question using a single word or phrase: {question} ASSISTANT:"
         inputs = self.processor(text=prompt, images=raw_image, return_tensors="pt").to(self.device)
         outputs = self.model.generate(**inputs, **self.vqa_inference_params, **kwargs)
@@ -441,10 +441,37 @@ class LLaVA(nn.Module):
         )
         #print(f"question: {question}, answer: {answer}")
         yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer], use_calibrator=use_calibrator)
-        logprobs_dict["yn_prob"] = yn_probs[0]
+        logprobs_dict["self_prompting_conf"] = yn_probs[0]
         logprobs_dict["yn_logits"] = yn_logits[0]
         #pdb.set_trace()
         return answer.lower(), logprobs_dict
+
+    def ask_multiplequestions(self, raw_image, questions, use_calibrator=True, **kwargs):
+        prompts = [f"USER: <image>\nAnswer the question using a single word or phrase: {q} ASSISTANT:" for q in questions]
+        images = [raw_image for _ in questions]
+        inputs = self.processor(text=prompts, images=images, padding=True, return_tensors="pt").to(self.device)
+        #outputs = self.model.generate(**inputs, **self.vqa_inference_params, **kwargs)
+        outputs = self.model.generate(**inputs, max_new_tokens=10, return_dict_in_generate=True, output_scores=True, **kwargs)
+        transition_scores = self.model.compute_transition_scores(
+            #outputs.sequences, outputs.scores, outputs.beam_indices, normalize_logits=True
+            outputs.sequences, outputs.scores, normalize_logits=True
+        )
+        generated_ids = outputs.sequences[:, inputs.input_ids.shape[-1]:]
+        answers, logprobs_dicts = [], []
+        for i in range(generated_ids.shape[0]):
+            answer, logprobs_dict = self.get_answer_with_probability(
+                transition_scores[i].tolist(), 
+                generated_ids[i].tolist(), 
+            )
+            answers.append(answer.lower())
+            logprobs_dicts.append(logprobs_dict)
+
+        #print(f"question: {question}, answer: {answer}")
+        yn_probs, yn_logits = self.get_answer_confidence(raw_image, questions, answers, use_calibrator=use_calibrator)
+        for i in range(len(yn_probs)):
+            logprobs_dicts[i]["self_prompting_conf"] = yn_probs[i]
+            logprobs_dicts[i]["yn_logits"] = yn_logits[i]
+        return answers, logprobs_dicts
     
     def get_answer_with_probability(self, scores, gen_ids):
         pad_token_id = self.processor.tokenizer.pad_token_id
@@ -496,7 +523,7 @@ class LLaVA(nn.Module):
         )
         #print(f"question: {question}, answer: {answer}")
         yn_probs, yn_logits = self.get_answer_confidence(raw_image, [caption_prompt], [answer], use_calibrator=use_calibrator)
-        logprobs_dict["yn_prob"] = yn_probs[0]
+        logprobs_dict["self_prompting_conf"] = yn_probs[0]
         logprobs_dict["yn_logits"] = yn_logits[0]
         return answer.lower(), logprobs_dict
 
@@ -507,7 +534,6 @@ class QwenVL(nn.Module):
         super(QwenVL, self).__init__()
 
         self.config = config
-        self.model_name = config['class_name']
         self.display_name = config['model_display_name']
         self.model = AutoModelForCausalLM.from_pretrained(config['pt_model_name'], trust_remote_code=True, torch_dtype=torch.float16).to(device)
         self.tokenizer = AutoTokenizer.from_pretrained(config['pt_model_name'], trust_remote_code=True)
@@ -598,7 +624,7 @@ class QwenVL(nn.Module):
         answer = answer.lower().strip()
         #print(f"question: {question}, answer: {answer}")
         yn_probs, yn_logits = self.get_answer_confidence(raw_image, [question], [answer], use_calibrator=use_calibrator, query_details=query_details)
-        logprobs_dict["yn_prob"] = yn_probs[0]
+        logprobs_dict["self_prompting_conf"] = yn_probs[0]
         logprobs_dict["yn_logits"] = yn_logits[0]
         #pdb.set_trace()
         return answer.lower(), logprobs_dict

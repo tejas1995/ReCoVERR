@@ -19,6 +19,7 @@ class T5LLM:
 
         self.config = config
         self.device = device
+        self.device = torch.device("cuda:1")
         model_name = config['model_name']
         display_name = config['display_name']
         self.rephrasing_inference_params = config['rephrasing_inference_params']

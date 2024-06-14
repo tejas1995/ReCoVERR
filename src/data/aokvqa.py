@@ -22,8 +22,10 @@ class AOKVQADataset(Dataset):
 
     def __init__(self, split: str, mode: str ='q2a', vis_processors=None, text_processors=None, type: str='direct'):
 
-        data_dir = '/net/nfs.cirrascale/mosaic/tejass/data/a-okvqa'
-        images_dir = '/net/nfs.cirrascale/mosaic/tejass/data/ms-coco/'
+        #data_dir = '/net/nfs.cirrascale/mosaic/tejass/data/a-okvqa'
+        #images_dir = '/net/nfs.cirrascale/mosaic/tejass/data/ms-coco/'
+        data_dir = '/home/tejas/data/recoverr/a-okvqa'
+        images_dir = '/home/tejas/data/recoverr/ms-coco/'
         image_filenames = os.listdir(images_dir)
         self.name = 'A-OKVQA'
         self.mode = mode

@@ -5,8 +5,10 @@ from typing import List, Any, Union, Tuple
 from collections import Counter
 from modules.lave.lave import LaveBase
 
-binary_prompts = json.load(open('/net/nfs.cirrascale/mosaic/tejass/data/lave_eval/binary_prompts.json'))
-nonbinary_prompts = json.load(open('/net/nfs.cirrascale/mosaic/tejass/data/lave_eval/nonbinary_prompts.json'))
+#binary_prompts = json.load(open('/net/nfs.cirrascale/mosaic/tejass/data/lave_eval/binary_prompts.json'))
+binary_prompts = json.load(open('/home/tejas/data/lave_eval/binary_prompts.json'))
+#nonbinary_prompts = json.load(open('/net/nfs.cirrascale/mosaic/tejass/data/lave_eval/nonbinary_prompts.json'))
+nonbinary_prompts = json.load(open('/home/tejas/data/lave_eval/nonbinary_prompts.json'))
 
 def get_lave_score(question, reference_answers, candidate_answer):
     unique_ref_answers = list(set(reference_answers))
@@ -21,7 +23,7 @@ def get_lave_score(question, reference_answers, candidate_answer):
         [{'role': 'user', "content": f"Question: {question} \n Reference answers: {', '.join(reference_answers)} \n Candidate answer: {candidate_answer}"}]
 
     gpt_response = openai_caller(
-                input_messages, 
+                input_messages,        
                 model='chatgpt-16k', 
                 max_new_tokens=150, 
                 temperature=0.0,
@@ -45,8 +47,8 @@ class LaveChatGPT(LaveBase):
         rationalize: bool = True,
         filter_refs: bool = True,
         use_caption: bool = False,
-        demos_file: Union[str, Path] = '/net/nfs.cirrascale/mosaic/tejass/data/lave_eval/nonbinary_prompts.json',
-        binary_demos_file: Union[str, Path] = '/net/nfs.cirrascale/mosaic/tejass/data/lave_eval/binary_prompts.json',
+        demos_file: Union[str, Path] = '/home/tejas/data/lave_eval/nonbinary_prompts.json',
+        binary_demos_file: Union[str, Path] = '/home/tejas/data/lave_eval/binary_prompts.json',
         debug: bool = False
     ) -> None:
         super().__init__(

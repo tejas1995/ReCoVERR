@@ -16,19 +16,12 @@ class WandBLogger:
                    project=wandb_config['project_name'] if project_name is None else project_name,
                    name=experiment_name)
         self.is_initialized = True
-        self.log_freq = wandb_config['log_freq']
 
     def log(self, log_dict):
 
         if self.is_initialized:
             wandb.log(log_dict)
 
-    def get_log_freq(self):
-        if self.is_initialized:
-            return self.log_freq
-        else:
-            return 100
-    
     def finish(self):
         wandb.finish()
 

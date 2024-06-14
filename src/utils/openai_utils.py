@@ -39,7 +39,7 @@ class OpenAICaller:
             }
         self.set_openai_keys()
 
-    def set_openai_keys(self, openai_config_file='/net/nfs.cirrascale/mosaic/tejass/data/openai_config.yaml'):
+    def set_openai_keys(self, openai_config_file='/home/tejas/data/openai_config_glamor.yaml'):
         '''
         Set API keys
         '''
@@ -77,11 +77,8 @@ class OpenAICaller:
             reply = response['choices'][0]['message']['content']
         else:
             reply = [x['message']['content'] for x in response['choices']]
-        #print(response['usage'])
         self.tokens_used[model]['n_input_tokens'] += response['usage']['prompt_tokens']
         self.tokens_used[model]['n_output_tokens'] += response['usage']['completion_tokens']
-        #print("Prompt tokens used: {}".format(response['usage']['prompt_tokens']))
-        #print(f"Total tokens used: {response['usage']['prompt_tokens'] + response['usage']['completion_tokens']}")
         return reply
 
     @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))

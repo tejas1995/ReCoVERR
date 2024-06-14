@@ -1,2 +1,0 @@
-imcapdb_display_name: 'Qwen-VL-Chat-RegionCaptions-OKVQAVal'
-region_captions_file: '/net/nfs.cirrascale/mosaic/tejass/data/okvqa/preprocd_data/qwen_verbalizations/coco_val_samregions_qwenregioncaptions.jsonl'
